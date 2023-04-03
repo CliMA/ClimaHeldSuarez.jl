@@ -2,3 +2,6 @@ name = "ClimaHeldSuarez"
 uuid = "0cae201b-c174-4f24-bc8e-b842fe38916d"
 authors = ["Gregory Wagner <wagner.greg@gmail.com>"]
 version = "0.1.0"
+
+[deps]
+ClimaCore = "d414da3d-4745-48bb-8d80-42e94e092884"
