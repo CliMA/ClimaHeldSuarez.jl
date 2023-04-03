@@ -1,7 +1,6 @@
 ENV["CLIMACORE_DISTRIBUTED"] = "MPI"
+ENV["TEST_NAME"] = "sphere/baroclinic_wave_rhoe"
 usempi = true
-npoly = parse(Int, get(ARGS, 1, 4))
-FT = get(ARGS, 2, Float64) == "Float64" ? Float64 : Float32
 using LinearAlgebra
 using Colors
 using JLD2
@@ -19,22 +18,18 @@ import ClimaCore:
     DataLayouts
 
 using Logging
-if usempi
-    using ClimaComms
-    using ClimaCommsMPI
-end
+using ClimaComms
+using ClimaCommsMPI
+resolution = get(ARGS, 1, "low")
+npoly = parse(Int, get(ARGS, 2, 4))
+FT = get(ARGS, 3, Float64) == "Float64" ? Float64 : Float32
 
-set_initial_condition(space) =
-    map(Fields.local_geometry_field(space)) do local_geometry
-        coord = local_geometry.coordinates
-        h = 1.0
-        u = Geometry.transform(
-            Geometry.Covariant12Axis(),
-            Geometry.UVVector(1.0, 1.0),
-            local_geometry,
-        )
-        return (h = h, u = u)
-    end
+include("../common_spaces.jl")
+include("../hybrid/sphere/baroclinic_wave_utilities.jl")
+
+
+center_initial_condition(local_geometry) =
+    center_initial_condition(local_geometry, Val(:ρe))
 
 function dss_comms!(topology, Y, ghost_buffer)
     Spaces.fill_send_buffer!(topology, Fields.field_values(Y), ghost_buffer)
@@ -50,10 +45,16 @@ function weighted_dss_full!(Y, ghost_buffer)
     return nothing
 end
 
-function shallow_water_dss_profiler(usempi::Bool, ::Type{FT}, npoly) where {FT}
-    context = ClimaCommsMPI.MPICommsContext()
-    pid, nprocs = ClimaComms.init(context)
-    iamroot = ClimaComms.iamroot(context)
+
+function hybrid3dcubedsphere_dss_profiler(
+    usempi::Bool,
+    ::Type{FT},
+    resolution,
+    npoly,
+) where {FT}
+    comms_ctx = ClimaCommsMPI.MPICommsContext()
+    pid, nprocs = ClimaComms.init(comms_ctx)
+    iamroot = ClimaComms.iamroot(comms_ctx)
     # log output only from root process
     logger_stream = iamroot ? stderr : devnull
     prev_logger = global_logger(ConsoleLogger(logger_stream, Logging.Info))
@@ -65,118 +66,134 @@ function shallow_water_dss_profiler(usempi::Bool, ::Type{FT}, npoly) where {FT}
         println("running distributed DSS using $nprocs processes")
     end
     GC.gc(false)
-    # Set up discretization
-    ne = 9 # the rossby_haurwitz test case's initial state has a singularity at the pole. We avoid it by using odd number of elements
-    Nq = npoly + 1
-    R = FT(6.37122e6) # radius of earth
-    domain = Domains.SphereDomain(R)
-    mesh = Meshes.EquiangularCubedSphere(domain, ne)
-    quad = Spaces.Quadratures.GLL{Nq}()
-    grid_topology =
-        Topologies.Topology2D(context, mesh, Topologies.spacefillingcurve(mesh))
-    space = Spaces.SpectralElementSpace2D(grid_topology, quad)
-    Y = set_initial_condition(space)
-    ghost_buffer = Spaces.create_dss_buffer(Y)
-    dss_buffer = Spaces.create_dss_buffer(Y)
-    weighted_dss! = Spaces.weighted_dss!
+    R = FT(6.371229e6)
+    z_max = FT(30e3)
+    z_elem, h_elem = resolution == "low" ? (10, 4) : (45, 24)
+    z_stretch = Meshes.Uniform()
+    z_stretch_string = "uniform"
+    horizontal_mesh = cubed_sphere_mesh(; radius = R, h_elem = h_elem)
+
+    quad = Spaces.Quadratures.GLL{npoly + 1}()
+    h_topology = Topologies.Topology2D(
+        comms_ctx,
+        horizontal_mesh,
+        Topologies.spacefillingcurve(horizontal_mesh),
+    )
+    h_space = Spaces.SpectralElementSpace2D(h_topology, quad)
+
+    center_space, face_space =
+        make_hybrid_spaces(h_space, z_max, z_elem; z_stretch)
+    ᶜlocal_geometry = Fields.local_geometry_field(center_space)
+    ᶠlocal_geometry = Fields.local_geometry_field(face_space)
+    Y = Fields.FieldVector(
+        c = center_initial_condition(ᶜlocal_geometry),
+        f = face_initial_condition(ᶠlocal_geometry),
+    )
+    ghost_buffer = (
+        c = Spaces.create_ghost_buffer(Y.c),
+        f = Spaces.create_ghost_buffer(Y.f),
+    )
+    dss_buffer_f = Spaces.create_dss_buffer(Y.f)
+    dss_buffer_c = Spaces.create_dss_buffer(Y.c)
     nsamples = 10000
-    nprofilesamples = 1000
+    nsamplesprofiling = 100
 
     # precompile relevant functions
-    Spaces.weighted_dss_internal!(Y, ghost_buffer)
-    weighted_dss_full!(Y, ghost_buffer)
+    space = axes(Y.c)
+    horizontal_topology = space.horizontal_space.topology
+    Spaces.weighted_dss_internal!(Y.c, ghost_buffer.c)
+    weighted_dss_full!(Y.c, ghost_buffer.c)
     Spaces.fill_send_buffer!(
-        grid_topology,
-        Fields.field_values(Y),
-        ghost_buffer,
+        horizontal_topology,
+        Fields.field_values(Y.c),
+        ghost_buffer.c,
     )
-    dss_comms!(grid_topology, Y, ghost_buffer)
-    Spaces.weighted_dss!(Y, dss_buffer)
-    ClimaComms.barrier(context)
+    dss_comms!(horizontal_topology, Y.c, ghost_buffer.c)
+    Spaces.weighted_dss!(Y.c, dss_buffer_c)
+    ClimaComms.barrier(comms_ctx)
 
     # timing
     walltime_dss_full = @elapsed begin # timing weighted dss
         for i in 1:nsamples
-            weighted_dss_full!(Y, ghost_buffer)
+            weighted_dss_full!(Y.c, ghost_buffer.c)
         end
     end
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss_full /= FT(nsamples)
 
     walltime_dss2_full = @elapsed begin # timing weighted dss2
         for i in 1:nsamples
-            Spaces.weighted_dss!(Y, dss_buffer)
+            Spaces.weighted_dss!(Y.c, dss_buffer_c)
         end
     end
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss2_full /= FT(nsamples)
 
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss_internal = @elapsed begin # timing internal dss
         for i in 1:nsamples
-            Spaces.weighted_dss_internal!(Y, ghost_buffer)
+            Spaces.weighted_dss_internal!(Y.c, ghost_buffer.c)
         end
     end
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss_internal /= FT(nsamples)
 
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss_comms = @elapsed begin # timing dss_comms
         for i in 1:nsamples
-            dss_comms!(grid_topology, Y, ghost_buffer)
+            dss_comms!(horizontal_topology, Y.c, ghost_buffer.c)
         end
     end
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss_comms /= FT(nsamples)
 
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss_comms_fsb = @elapsed begin # timing dss_fill_send_buffer
         for i in 1:nsamples
             Spaces.fill_send_buffer!(
-                grid_topology,
-                Fields.field_values(Y),
-                ghost_buffer,
+                horizontal_topology,
+                Fields.field_values(Y.c),
+                ghost_buffer.c,
             )
         end
     end
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss_comms_fsb /= FT(nsamples)
 
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss_comms_other = @elapsed begin # timing dss_fill_send_buffer
         for i in 1:nsamples
-            ClimaComms.start(ghost_buffer.graph_context)
-            ClimaComms.finish(ghost_buffer.graph_context)
+            ClimaComms.start(ghost_buffer.c.graph_context)
+            ClimaComms.finish(ghost_buffer.c.graph_context)
         end
     end
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
     walltime_dss_comms_other /= FT(nsamples)
 
-
     # profiling
-    ClimaComms.barrier(context)
-    for i in 1:nprofilesamples # profiling weighted dss
+    ClimaComms.barrier(comms_ctx)
+
+    for i in 1:nsamplesprofiling # profiling weighted dss
         @nvtx "dss-loop" color = colorant"green" begin
             @nvtx "start" color = colorant"brown" begin
-                Spaces.weighted_dss_start!(Y, ghost_buffer)
+                Spaces.weighted_dss_start!(Y.c, ghost_buffer.c)
             end
             @nvtx "internal" color = colorant"blue" begin
-                Spaces.weighted_dss_internal!(Y, ghost_buffer)
+                Spaces.weighted_dss_internal!(Y.c, ghost_buffer.c)
             end
             @nvtx "ghost" color = colorant"yellow" begin
-                Spaces.weighted_dss_ghost!(Y, ghost_buffer)
+                Spaces.weighted_dss_ghost!(Y.c, ghost_buffer.c)
             end
         end
     end
-    ClimaComms.barrier(context)
+    ClimaComms.barrier(comms_ctx)
 
-    for i in 1:nprofilesamples # profiling dss_comms
+    for i in 1:nsamplesprofiling # profiling dss_comms
         @nvtx "dss-comms-loop" color = colorant"green" begin
-            dss_comms!(grid_topology, Y, ghost_buffer)
+            dss_comms!(horizontal_topology, Y.c, ghost_buffer.c)
         end
     end
-    ClimaComms.barrier(context)
-
+    ClimaComms.barrier(comms_ctx)
 
     if iamroot
         println("# of samples = $nsamples")
@@ -192,7 +209,7 @@ function shallow_water_dss_profiler(usempi::Bool, ::Type{FT}, npoly) where {FT}
         println(
             "walltime_dss_comms_other per sample = $walltime_dss_comms_other (sec)",
         )
-        output_dir = joinpath(Base.@__DIR__, "output")
+        output_dir = joinpath(Base.@__DIR__, "dss_output_$(resolution)_res")
         mkpath(output_dir)
         dss_scaling_file = joinpath(
             output_dir,
@@ -211,7 +228,8 @@ function shallow_water_dss_profiler(usempi::Bool, ::Type{FT}, npoly) where {FT}
             walltime_dss_comms_other,
         )
     end
+
     return nothing
 end
 
-shallow_water_dss_profiler(usempi, FT, npoly)
+hybrid3dcubedsphere_dss_profiler(usempi, FT, resolution, npoly)
