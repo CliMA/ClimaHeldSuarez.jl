@@ -1,0 +1,4 @@
+name = "ClimaHeldSuarez"
+uuid = "0cae201b-c174-4f24-bc8e-b842fe38916d"
+authors = ["Gregory Wagner <wagner.greg@gmail.com>"]
+version = "0.1.0"
