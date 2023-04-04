@@ -171,16 +171,6 @@ function implicit_tendency!(Yₜ, Y, p, t)
 
     @. Yₜ.f.w = -(ᶠgradᵥ(ᶜp) / ᶠinterp(ᶜρ) + ᶠgradᵥ(ᶜK + ᶜΦ))
 
-    # TODO: Add flux correction to the Jacobian
-    # @. Yₜ.c.ρ += ᶜFC(ᶠw, ᶜρ)
-    # if :ρθ in propertynames(Y.c)
-    #     @. Yₜ.c.ρθ += ᶜFC(ᶠw, ᶜρθ)
-    # elseif :ρe in propertynames(Y.c)
-    #     @. Yₜ.c.ρe += ᶜFC(ᶠw, ᶜρe)
-    # elseif :ρe_int in propertynames(Y.c)
-    #     @. Yₜ.c.ρe_int += ᶜFC(ᶠw, ᶜρe_int)
-    # end
-
     return Yₜ
 end
 
@@ -275,41 +265,21 @@ function Wfact!(W, Y, p, dtγ, t)
     @. ᶜp = pressure_ρe(ᶜρe, ᶜK, ᶜΦ, ᶜρ)
 
     if isnothing(ᶠupwind_product)
-        if flags.∂ᶜ𝔼ₜ∂ᶠ𝕄_mode == :exact
-            @. ∂ᶜ𝔼ₜ∂ᶠ𝕄 =
-                -(ᶜdivᵥ_stencil(ᶠinterp(ᶜρe + ᶜp) * one(ᶠw))) - compose(
-                    ᶜdivᵥ_stencil(ᶠw),
-                    compose(
-                        ᶠinterp_stencil(one(ᶜp)),
-                        -(ᶜρ * R_d / cv_d) * ∂ᶜK∂ᶠw_data,
-                    ),
-                )
-        elseif flags.∂ᶜ𝔼ₜ∂ᶠ𝕄_mode == :no_∂ᶜp∂ᶜK
-            @. ∂ᶜ𝔼ₜ∂ᶠ𝕄 = -(ᶜdivᵥ_stencil(ᶠinterp(ᶜρe + ᶜp) * one(ᶠw)))
-        else
-            error(
-                "∂ᶜ𝔼ₜ∂ᶠ𝕄_mode must be :exact or :no_∂ᶜp∂ᶜK when using ρe \
-                    without upwinding",
+        @. ∂ᶜ𝔼ₜ∂ᶠ𝕄 =
+            -(ᶜdivᵥ_stencil(ᶠinterp(ᶜρe + ᶜp) * one(ᶠw))) - compose(
+                ᶜdivᵥ_stencil(ᶠw),
+                compose(
+                    ᶠinterp_stencil(one(ᶜp)),
+                    -(ᶜρ * R_d / cv_d) * ∂ᶜK∂ᶠw_data,
+                ),
             )
-        end
     else
-        if flags.∂ᶜ𝔼ₜ∂ᶠ𝕄_mode == :no_∂ᶜp∂ᶜK
-            @. ∂ᶜ𝔼ₜ∂ᶠ𝕄 = -(ᶜdivᵥ_stencil(
-                ᶠinterp(ᶜρ) * ᶠupwind_product(ᶠw + εw, (ᶜρe + ᶜp) / ᶜρ) /
-                to_scalar(ᶠw + εw),
-            ))
-        else
-            error("∂ᶜ𝔼ₜ∂ᶠ𝕄_mode must be :no_∂ᶜp∂ᶜK when using ρe with \
-                    upwinding")
-        end
+        error("∂ᶜ𝔼ₜ∂ᶠ𝕄_mode must be :no_∂ᶜp∂ᶜK when using ρe with \
+                upwinding")
     end
 
     to_scalar_coefs(vector_coefs) =
         map(vector_coef -> vector_coef.u₃, vector_coefs)
-
-    if flags.∂ᶠ𝕄ₜ∂ᶜρ_mode != :exact && flags.∂ᶠ𝕄ₜ∂ᶜρ_mode != :gradΦ_shenanigans
-        error("∂ᶠ𝕄ₜ∂ᶜρ_mode must be :exact or :gradΦ_shenanigans")
-    end
 
     @. ∂ᶠ𝕄ₜ∂ᶜ𝔼 = to_scalar_coefs(
         -1 / ᶠinterp(ᶜρ) * ᶠgradᵥ_stencil(R_d / cv_d * one(ᶜρe)),
