@@ -4,4 +4,5 @@ authors = ["Gregory Wagner <wagner.greg@gmail.com>"]
 version = "0.1.0"
 
 [deps]
+ClimaComms = "3a4d1b5c-c61d-41fd-a00a-5873ba7a1b0d"
 ClimaCore = "d414da3d-4745-48bb-8d80-42e94e092884"

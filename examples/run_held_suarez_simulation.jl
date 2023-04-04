@@ -1,3 +1,6 @@
-using ClimaHeldSuarez: HeldSuarezModel
+using ClimaHeldSuarez.HeldSuarezModels: HeldSuarezModel, VerticallyStaggeredCubedSphereSpace
 
-model = HeldSuarezModel()
+kilometers = 1e3
+z = (0, 30kilometers)
+space = VerticallyStaggeredCubedSphereSpace(; z)
+model = HeldSuarezModel(; space)
