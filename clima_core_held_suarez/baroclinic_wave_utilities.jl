@@ -6,7 +6,8 @@ const κ = FT(2 / 7)
 const T_tri = FT(273.16)
 const grav = FT(9.80616)
 const Ω = FT(7.29212e-5)
-include("../staggered_nonhydrostatic_model.jl")
+
+include("staggered_nonhydrostatic_model.jl")
 
 # Constants required for balanced flow and baroclinic wave initial conditions
 const R = FT(6.371229e6)

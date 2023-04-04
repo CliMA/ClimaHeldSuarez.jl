@@ -1,22 +1,13 @@
-
 using OrdinaryDiffEq
 using DiffEqCallbacks
 using JLD2
-
-
 using ClimaCore.DataLayouts
-
 using ClimaCore: Geometry, Meshes, Spaces, Topologies, Fields
-
 using ForwardDiff: Dual
 
 const FT = Float64
 
-
-
-#__________________
-
-include("sphere/baroclinic_wave_utilities.jl")
+include("baroclinic_wave_utilities.jl")
 include("common_spaces.jl")
 
 const sponge = false
@@ -55,16 +46,14 @@ end
 center_initial_condition(local_geometry) =
     center_initial_condition(local_geometry, Val(:ρe))
 
-# include("../common_spaces.jl")
-
 z_stretch = Meshes.Uniform()
 z_stretch_string = "uniform"
-
 
 function cubed_sphere_mesh(; radius, h_elem)
     domain = Domains.SphereDomain(radius)
     return Meshes.EquiangularCubedSphere(domain, h_elem)
 end
+
 horizontal_mesh = cubed_sphere_mesh(; radius = R, h_elem = 4)
 
 t_start = FT(0)
@@ -116,8 +105,6 @@ if ode_algorithm <: Union{
 else
     jac_kwargs = alg_kwargs = (;)
 end
-
-
 
 # Y: prognostic state vector
 # p: "parameters"
