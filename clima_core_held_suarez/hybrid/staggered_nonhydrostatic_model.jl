@@ -127,44 +127,14 @@ function implicit_tendency!(Yₜ, Y, p, t)
 
     @. Yₜ.c.ρ = -(ᶜdivᵥ(ᶠinterp(ᶜρ) * ᶠw))
 
-    if :ρθ in propertynames(Y.c)
-        ᶜρθ = Y.c.ρθ
-        @. ᶜp = pressure_ρθ(ᶜρθ)
-        if isnothing(ᶠupwind_product)
-            @. Yₜ.c.ρθ = -(ᶜdivᵥ(ᶠinterp(ᶜρθ) * ᶠw))
-        else
-            @. Yₜ.c.ρθ =
-                -(ᶜdivᵥ(ᶠinterp(Y.c.ρ) * ᶠupwind_product(ᶠw, ᶜρθ / Y.c.ρ)))
-        end
-    elseif :ρe in propertynames(Y.c)
-        ᶜρe = Y.c.ρe
-        @. ᶜp = pressure_ρe(ᶜρe, ᶜK, ᶜΦ, ᶜρ)
-        if isnothing(ᶠupwind_product)
-            @. Yₜ.c.ρe = -(ᶜdivᵥ(ᶠinterp(ᶜρe + ᶜp) * ᶠw))
-        else
-            @. Yₜ.c.ρe = -(ᶜdivᵥ(
-                ᶠinterp(Y.c.ρ) * ᶠupwind_product(ᶠw, (ᶜρe + ᶜp) / Y.c.ρ),
-            ))
-        end
-    elseif :ρe_int in propertynames(Y.c)
-        ᶜρe_int = Y.c.ρe_int
-        @. ᶜp = pressure_ρe_int(ᶜρe_int, ᶜρ)
-        if isnothing(ᶠupwind_product)
-            @. Yₜ.c.ρe_int = -(
-                ᶜdivᵥ(ᶠinterp(ᶜρe_int + ᶜp) * ᶠw) -
-                ᶜinterp(dot(ᶠgradᵥ(ᶜp), Geometry.Contravariant3Vector(ᶠw)))
-            )
-            # or, equivalently,
-            # Yₜ.c.ρe_int = -(ᶜdivᵥ(ᶠinterp(ᶜρe_int) * ᶠw) + ᶜp * ᶜdivᵥ(ᶠw))
-        else
-            @. Yₜ.c.ρe_int = -(
-                ᶜdivᵥ(
-                    ᶠinterp(Y.c.ρ) *
-                    ᶠupwind_product(ᶠw, (ᶜρe_int + ᶜp) / Y.c.ρ),
-                ) -
-                ᶜinterp(dot(ᶠgradᵥ(ᶜp), Geometry.Contravariant3Vector(ᶠw)))
-            )
-        end
+    ᶜρe = Y.c.ρe
+    @. ᶜp = pressure_ρe(ᶜρe, ᶜK, ᶜΦ, ᶜρ)
+    if isnothing(ᶠupwind_product)
+        @. Yₜ.c.ρe = -(ᶜdivᵥ(ᶠinterp(ᶜρe + ᶜp) * ᶠw))
+    else
+        @. Yₜ.c.ρe = -(ᶜdivᵥ(
+            ᶠinterp(Y.c.ρ) * ᶠupwind_product(ᶠw, (ᶜρe + ᶜp) / Y.c.ρ),
+        ))
     end
 
     Yₜ.c.uₕ .= Ref(zero(eltype(Yₜ.c.uₕ)))
@@ -211,13 +181,13 @@ function default_remaining_tendency!(Yₜ, Y, p, t)
 
     # Momentum conservation
 
-    if point_type <: Geometry.Abstract3DPoint
+    # if point_type <: Geometry.Abstract3DPoint
         @. ᶜω³ = curlₕ(ᶜuₕ)
         @. ᶠω¹² = curlₕ(ᶠw)
-    elseif point_type <: Geometry.Abstract2DPoint
-        ᶜω³ .= Ref(zero(eltype(ᶜω³)))
-        @. ᶠω¹² = Geometry.Contravariant12Vector(curlₕ(ᶠw))
-    end
+    # elseif point_type <: Geometry.Abstract2DPoint
+    #     ᶜω³ .= Ref(zero(eltype(ᶜω³)))
+    #     @. ᶠω¹² = Geometry.Contravariant12Vector(curlₕ(ᶠw))
+    # end
     @. ᶠω¹² += ᶠcurlᵥ(ᶜuₕ)
 
     # TODO: Modify to account for topography
@@ -226,12 +196,12 @@ function default_remaining_tendency!(Yₜ, Y, p, t)
 
     @. Yₜ.c.uₕ -=
         ᶜinterp(ᶠω¹² × ᶠu³) + (ᶜf + ᶜω³) × Geometry.Contravariant12Vector(ᶜuₕ)
-    if point_type <: Geometry.Abstract3DPoint
+    # if point_type <: Geometry.Abstract3DPoint
         @. Yₜ.c.uₕ -= gradₕ(ᶜp) / ᶜρ + gradₕ(ᶜK + ᶜΦ)
-    elseif point_type <: Geometry.Abstract2DPoint
-        @. Yₜ.c.uₕ -=
-            Geometry.Covariant12Vector(gradₕ(ᶜp) / ᶜρ + gradₕ(ᶜK + ᶜΦ))
-    end
+    # elseif point_type <: Geometry.Abstract2DPoint
+    #     @. Yₜ.c.uₕ -=
+    #         Geometry.Covariant12Vector(gradₕ(ᶜp) / ᶜρ + gradₕ(ᶜK + ᶜΦ))
+    # end
 
     @. Yₜ.f.w -= ᶠω¹² × ᶠu¹²
 end
@@ -273,6 +243,10 @@ function Wfact!(W, Y, p, dtγ, t)
                     -(ᶜρ * R_d / cv_d) * ∂ᶜK∂ᶠw_data,
                 ),
             )
+    elseif flags.∂ᶜ𝔼ₜ∂ᶠ𝕄_mode == :no_∂ᶜp∂ᶜK
+        # same as above, but we approximate ∂(ᶜp)/∂(ᶜK) = 0, so that
+        # ∂ᶜ𝔼ₜ∂ᶠ𝕄 has 3 diagonals instead of 5
+        @. ∂ᶜ𝔼ₜ∂ᶠ𝕄 = -(ᶜdivᵥ_stencil(ᶠinterp(ᶜρe + ᶜp) * one(ᶠw)))
     else
         error("∂ᶜ𝔼ₜ∂ᶠ𝕄_mode must be :no_∂ᶜp∂ᶜK when using ρe with \
                 upwinding")

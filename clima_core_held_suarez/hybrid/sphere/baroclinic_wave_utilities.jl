@@ -79,33 +79,24 @@ cond(λ, ϕ) = (0 < r(λ, ϕ) < d_0) * (r(λ, ϕ) != R * pi)
     cosd(ϕ_c) *
     sind(λ - λ_c) / sin(r(λ, ϕ) / R) * cond(λ, ϕ)
 
-function center_initial_condition(
-    ᶜlocal_geometry,
-    ᶜ𝔼_name;
-    is_balanced_flow = false,
-)
+function center_initial_condition(ᶜlocal_geometry, ᶜ𝔼_name)
     (; lat, long, z) = ᶜlocal_geometry.coordinates
+
     ᶜρ = @. pres(lat, z) / R_d / temp(lat, z)
+
     u₀ = @. u(lat, z)
     v₀ = @. v(lat, z)
-    if !is_balanced_flow
-        @. u₀ += δu(long, lat, z)
-        @. v₀ += δv(long, lat, z)
-    end
+
+    @. u₀ += δu(long, lat, z)
+    @. v₀ += δv(long, lat, z)
+
     ᶜuₕ_local = @. Geometry.UVVector(u₀, v₀)
     ᶜuₕ = @. Geometry.Covariant12Vector(ᶜuₕ_local, ᶜlocal_geometry)
-    if ᶜ𝔼_name === Val(:ρθ)
-        ᶜρθ = @. ᶜρ * θ(lat, z)
-        return NamedTuple{(:ρ, :ρθ, :uₕ)}.(tuple.(ᶜρ, ᶜρθ, ᶜuₕ))
-    elseif ᶜ𝔼_name === Val(:ρe)
-        ᶜρe = @. ᶜρ * (
-            cv_d * (temp(lat, z) - T_tri) + norm_sqr(ᶜuₕ_local) / 2 + grav * z
-        )
-        return NamedTuple{(:ρ, :ρe, :uₕ)}.(tuple.(ᶜρ, ᶜρe, ᶜuₕ))
-    elseif ᶜ𝔼_name === Val(:ρe_int)
-        ᶜρe_int = @. ᶜρ * cv_d * (temp(lat, z) - T_tri)
-        return NamedTuple{(:ρ, :ρe_int, :uₕ)}.(tuple.(ᶜρ, ᶜρe_int, ᶜuₕ))
-    end
+    ᶜρe = @. ᶜρ * (
+        cv_d * (temp(lat, z) - T_tri) + norm_sqr(ᶜuₕ_local) / 2 + grav * z
+    )
+
+    return NamedTuple{(:ρ, :ρe, :uₕ)}.(tuple.(ᶜρ, ᶜρe, ᶜuₕ))
 end
 
 function face_initial_condition(local_geometry)
@@ -159,11 +150,138 @@ function held_suarez_tendency!(Yₜ, Y, p, t)
         )
 
     @. Yₜ.c.uₕ -= (k_f * ᶜheight_factor) * Y.c.uₕ
-    if :ρθ in propertynames(Y.c)
-        @. Yₜ.c.ρθ -= ᶜΔρT * (p_0 / ᶜp)^κ
-    elseif :ρe in propertynames(Y.c)
-        @. Yₜ.c.ρe -= ᶜΔρT * cv_d
-    elseif :ρe_int in propertynames(Y.c)
-        @. Yₜ.c.ρe_int -= ᶜΔρT * cv_d
-    end
+    @. Yₜ.c.ρe -= ᶜΔρT * cv_d
+end
+
+
+
+
+function rhs_explicit!(dY, Y, _, t)
+    cρ = Y.Yc.ρ # scalar on centers
+    fw = Y.w # Covariant3Vector on faces
+    cuₕ = Y.uₕ # Covariant12Vector on centers
+    cρe = Y.Yc.ρe # scalar on centers
+
+    dρ = dY.Yc.ρ
+    dw = dY.w
+    duₕ = dY.uₕ
+    dρe = dY.Yc.ρe
+
+
+    # 0) update w at the bottom
+    # fw = -g^31 cuₕ/ g^33
+
+    hdiv = Operators.Divergence()
+    hwdiv = Operators.WeakDivergence()
+    hgrad = Operators.Gradient()
+    hwgrad = Operators.WeakGradient()
+    hcurl = Operators.Curl()
+    hwcurl = Operators.WeakCurl()
+
+    dρ .= 0 .* cρ
+
+    If2c = Operators.InterpolateF2C()
+    Ic2f = Operators.InterpolateC2F(
+        bottom = Operators.Extrapolate(),
+        top = Operators.Extrapolate(),
+    )
+    cw = If2c.(fw)
+    cuvw = Geometry.Covariant123Vector.(cuₕ) .+ Geometry.Covariant123Vector.(cw)
+
+    ce = @. cρe / cρ
+    cp = @. pressure(cρ, ce, norm(cuvw), coords.z)
+
+    ### HYPERVISCOSITY
+    # 1) compute hyperviscosity coefficients
+    ch_tot = @. ce + cp / cρ
+    χe = @. dρe = hwdiv(hgrad(ch_tot))
+    χuₕ = @. duₕ =
+        hwgrad(hdiv(cuₕ)) - Geometry.Covariant12Vector(
+            hwcurl(Geometry.Covariant3Vector(hcurl(cuₕ))),
+        )
+
+    Spaces.weighted_dss!(dρe)
+    Spaces.weighted_dss!(duₕ)
+
+    κ₄ = 1.0e17 # m^4/s
+    @. dρe = -κ₄ * hwdiv(cρ * hgrad(χe))
+    @. duₕ =
+        -κ₄ * (
+            hwgrad(hdiv(χuₕ)) - Geometry.Covariant12Vector(
+                hwcurl(Geometry.Covariant3Vector(hcurl(χuₕ))),
+            )
+        )
+
+    # 1) Mass conservation
+
+    dw .= fw .* 0
+
+    # 1.a) horizontal divergence
+    dρ .-= hdiv.(cρ .* (cuvw))
+
+    # 1.b) vertical divergence
+    vdivf2c = Operators.DivergenceF2C(
+        top = Operators.SetValue(Geometry.Contravariant3Vector(0.0)),
+        bottom = Operators.SetValue(Geometry.Contravariant3Vector(0.0)),
+    )
+    # we want the total u³ at the boundary to be zero: we can either constrain
+    # both to be zero, or allow one to be non-zero and set the other to be its
+    # negation
+
+    # explicit part
+    dρ .-= vdivf2c.(Ic2f.(cρ .* cuₕ))
+    # implicit part
+    dρ .-= vdivf2c.(Ic2f.(cρ) .* fw)
+
+    # 2) Momentum equation
+
+    # curl term
+    hcurl = Operators.Curl()
+    # effectively a homogeneous Dirichlet condition on u₁ at the boundary
+    vcurlc2f = Operators.CurlC2F(
+        bottom = Operators.SetCurl(Geometry.Contravariant12Vector(0.0, 0.0)),
+        top = Operators.SetCurl(Geometry.Contravariant12Vector(0.0, 0.0)),
+    )
+    cω³ = hcurl.(cuₕ) # Contravariant3Vector
+    fω¹² = hcurl.(fw) # Contravariant12Vector
+    fω¹² .+= vcurlc2f.(cuₕ) # Contravariant12Vector
+
+    # cross product
+    # convert to contravariant
+    # these will need to be modified with topography
+    fu¹² =
+        Geometry.Contravariant12Vector.(
+            Geometry.Covariant123Vector.(Ic2f.(cuₕ)),
+        ) # Contravariant12Vector in 3D
+    fu³ = Geometry.Contravariant3Vector.(Geometry.Covariant123Vector.(fw))
+    @. dw -= fω¹² × fu¹² # Covariant3Vector on faces
+    @. duₕ -= If2c(fω¹² × fu³)
+
+    # Needed for 3D:
+    @. duₕ -=
+        (f + cω³) ×
+        Geometry.Contravariant12Vector(Geometry.Covariant123Vector(cuₕ))
+
+    @. duₕ -= hgrad(cp) / cρ
+    vgradc2f = Operators.GradientC2F(
+        bottom = Operators.SetGradient(Geometry.Covariant3Vector(0.0)),
+        top = Operators.SetGradient(Geometry.Covariant3Vector(0.0)),
+    )
+    @. dw -= vgradc2f(cp) / Ic2f(cρ)
+
+    cE = @. (norm(cuvw)^2) / 2 + Φ(coords.z)
+    @. duₕ -= hgrad(cE)
+    @. dw -= vgradc2f(cE)
+
+    # 3) total energy
+
+    @. dρe -= hdiv(cuvw * (cρe + cp))
+    @. dρe -= vdivf2c(fw * Ic2f(cρe + cp))
+    @. dρe -= vdivf2c(Ic2f(cuₕ * (cρe + cp)))
+
+    Spaces.weighted_dss!(dY.Yc)
+    Spaces.weighted_dss!(dY.uₕ)
+    Spaces.weighted_dss!(dY.w)
+
+    return dY
 end

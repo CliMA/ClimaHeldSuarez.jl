@@ -6,9 +6,24 @@ using JLD2
 
 using ClimaCore.DataLayouts
 
-include("baroclinic_wave_utilities.jl")
+using ClimaCore: Geometry, Meshes, Spaces, Topologies, Fields
+
+using ForwardDiff: Dual
+
+const FT = Float64
+
+
+
+#__________________
+
+include("sphere/baroclinic_wave_utilities.jl")
+include("common_spaces.jl")
 
 const sponge = false
+
+jacobian_flags = (; ∂ᶜ𝔼ₜ∂ᶠ𝕄_mode = :no_∂ᶜp∂ᶜK, ∂ᶠ𝕄ₜ∂ᶜρ_mode = :exact)
+
+test_implicit_solver = false
 
 # Variables required for driver.jl (modify as needed)
 horizontal_mesh = cubed_sphere_mesh(; radius = R, h_elem = 4)
@@ -40,54 +55,71 @@ end
 center_initial_condition(local_geometry) =
     center_initial_condition(local_geometry, Val(:ρe))
 
+# include("../common_spaces.jl")
 
-include(joinpath(test_dir, "$test_file_name.jl"))
-
-    const FT = Float64
-
-    include("../common_spaces.jl")
-
-    z_stretch = Meshes.Uniform()
-    z_stretch_string = "uniform"
+z_stretch = Meshes.Uniform()
+z_stretch_string = "uniform"
 
 
-    function cubed_sphere_mesh(; radius, h_elem)
-        domain = Domains.SphereDomain(radius)
-        return Meshes.EquiangularCubedSphere(domain, h_elem)
-    end
-    horizontal_mesh = cubed_sphere_mesh(; radius = R, h_elem = 4)
+function cubed_sphere_mesh(; radius, h_elem)
+    domain = Domains.SphereDomain(radius)
+    return Meshes.EquiangularCubedSphere(domain, h_elem)
+end
+horizontal_mesh = cubed_sphere_mesh(; radius = R, h_elem = 4)
 
-    t_start = FT(0)
-    quadrature = Spaces.Quadratures.GLL{npoly + 1}()
-    h_topology = Topologies.Topology2D(ClimaComms.SingletonCommsContext(), horizontal_mesh)
-    h_space = Spaces.SpectralElementSpace2D(h_topology, quadrature)
-    z_domain = Domains.IntervalDomain(
-        Geometry.ZPoint(zero(z_max)),
-        Geometry.ZPoint(z_max);
-        boundary_tags = (:bottom, :top),
-    )
-    z_mesh = Meshes.IntervalMesh(z_domain, z_stretch; nelems = z_elem)
-    z_topology = Topologies.IntervalTopology(z_mesh)
-    z_space = Spaces.CenterFiniteDifferenceSpace(z_topology)
-    center_space = Spaces.ExtrudedFiniteDifferenceSpace(h_space, z_space)
-    face_space = Spaces.FaceExtrudedFiniteDifferenceSpace(center_space)
+t_start = FT(0)
+quadrature = Spaces.Quadratures.GLL{npoly + 1}()
+h_topology = Topologies.Topology2D(ClimaComms.SingletonCommsContext(), horizontal_mesh)
+h_space = Spaces.SpectralElementSpace2D(h_topology, quadrature)
+z_domain = Domains.IntervalDomain(
+    Geometry.ZPoint(zero(z_max)),
+    Geometry.ZPoint(z_max);
+    boundary_tags = (:bottom, :top),
+)
+z_mesh = Meshes.IntervalMesh(z_domain, z_stretch; nelems = z_elem)
+z_topology = Topologies.IntervalTopology(z_mesh)
+z_space = Spaces.CenterFiniteDifferenceSpace(z_topology)
+center_space = Spaces.ExtrudedFiniteDifferenceSpace(h_space, z_space)
+face_space = Spaces.FaceExtrudedFiniteDifferenceSpace(center_space)
 
+ᶜlocal_geometry = Fields.local_geometry_field(center_space)
+ᶠlocal_geometry = Fields.local_geometry_field(face_space)
 
-
-    ᶜlocal_geometry = Fields.local_geometry_field(center_space)
-    ᶠlocal_geometry = Fields.local_geometry_field(face_space)
-    Y = Fields.FieldVector(
-        c = center_initial_condition(ᶜlocal_geometry),
-        f = face_initial_condition(ᶠlocal_geometry),
-    )
-
+Y = Fields.FieldVector(
+    c = center_initial_condition(ᶜlocal_geometry),
+    f = face_initial_condition(ᶠlocal_geometry),
+)
 
 p = merge(
         default_cache(ᶜlocal_geometry, ᶠlocal_geometry, Y, upwinding_mode),
         additional_cache(ᶜlocal_geometry, ᶠlocal_geometry, dt),
     )
 
-    # Y: prognostic state vector
+if ode_algorithm <: Union{
+    OrdinaryDiffEq.OrdinaryDiffEqImplicitAlgorithm,
+    OrdinaryDiffEq.OrdinaryDiffEqAdaptiveImplicitAlgorithm,
+}
+    use_transform = !(ode_algorithm in (Rosenbrock23, Rosenbrock32))
+    W = SchurComplementW(Y, use_transform, jacobian_flags, test_implicit_solver)
+    jac_kwargs =
+        use_transform ? (; jac_prototype = W, Wfact_t = Wfact!) :
+        (; jac_prototype = W, Wfact = Wfact!)
+
+    alg_kwargs = (; linsolve = linsolve!)
+    if ode_algorithm <: Union{
+        OrdinaryDiffEq.OrdinaryDiffEqNewtonAlgorithm,
+        OrdinaryDiffEq.OrdinaryDiffEqNewtonAdaptiveAlgorithm,
+    }
+        alg_kwargs =
+            (; alg_kwargs..., nlsolve = NLNewton(; max_iter = max_newton_iters))
+    end
+else
+    jac_kwargs = alg_kwargs = (;)
+end
+
+
+
+# Y: prognostic state vector
 # p: "parameters"
 # Y.c: centered state variables
 # Y.f: interface state variables
@@ -97,16 +129,14 @@ dss_callback = FunctionCallingCallback(func_start = true) do Y, t, integrator
     Spaces.weighted_dss!(Y.f, p.ghost_buffer.f)
 end
 
-problem = SplitODEProblem(
-    ODEFunction(
-        implicit_tendency!;
-        tgrad = (∂Y∂t, Y, p, t) -> (∂Y∂t .= 0),
-    ),
-    remaining_tendency!,
-    Y,
-    (t_start, t_end),
-    p,
-)
+# Explicit:
+# prob = ODEProblem(rhs_explicit!, Y_init, (0.0, T), u)
+
+# For implicit time-stepping we use SplitODEProblem
+tgrad(dYdt, Y, parameters, time) = dYdt .= 0
+implicit_tendency_func = ODEFunction(implicit_tendency!; jac_kwargs..., tgrad)
+time_span = (t_start, t_end)
+problem = SplitODEProblem(implicit_tendency_func, remaining_tendency!, Y, time_span, p)
 
 integrator = OrdinaryDiffEq.init(
     problem,
