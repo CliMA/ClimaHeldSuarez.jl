@@ -1,5 +1,5 @@
 module ClimaHeldSuarez
 
-greet() = print("Hello World!")
+include("HeldSuarezModels.jl")
 
 end # module ClimaHeldSuarez
