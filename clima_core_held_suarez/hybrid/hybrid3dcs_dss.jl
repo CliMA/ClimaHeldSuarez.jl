@@ -5,7 +5,7 @@ using LinearAlgebra
 using Colors
 using JLD2
 
-include("../nvtx.jl")
+include("nvtx.jl")
 
 import ClimaCore:
     Domains,

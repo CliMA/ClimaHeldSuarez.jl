@@ -171,16 +171,6 @@ function implicit_tendency!(Yₜ, Y, p, t)
 
     @. Yₜ.f.w = -(ᶠgradᵥ(ᶜp) / ᶠinterp(ᶜρ) + ᶠgradᵥ(ᶜK + ᶜΦ))
 
-    # TODO: Add flux correction to the Jacobian
-    # @. Yₜ.c.ρ += ᶜFC(ᶠw, ᶜρ)
-    # if :ρθ in propertynames(Y.c)
-    #     @. Yₜ.c.ρθ += ᶜFC(ᶠw, ᶜρθ)
-    # elseif :ρe in propertynames(Y.c)
-    #     @. Yₜ.c.ρe += ᶜFC(ᶠw, ᶜρe)
-    # elseif :ρe_int in propertynames(Y.c)
-    #     @. Yₜ.c.ρe_int += ᶜFC(ᶠw, ᶜρe_int)
-    # end
-
     return Yₜ
 end
 
