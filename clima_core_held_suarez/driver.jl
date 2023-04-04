@@ -80,7 +80,19 @@ end
 import ClimaCore: enable_threading
 enable_threading() = false
 
-
+if haskey(ENV, "RESTART_FILE")
+    restart_file_name = ENV["RESTART_FILE"]
+    if is_distributed
+        restart_file_name =
+            split(restart_file_name, ".jld2")[1] * "_pid$pid.jld2"
+    end
+    restart_data = jldopen(restart_file_name)
+    t_start = restart_data["t"]
+    Y = restart_data["Y"]
+    close(restart_data)
+    ᶜlocal_geometry = Fields.local_geometry_field(Y.c)
+    ᶠlocal_geometry = Fields.local_geometry_field(Y.f)
+else
     t_start = FT(0)
     if is_distributed
         h_space =
@@ -96,11 +108,8 @@ enable_threading() = false
         c = center_initial_condition(ᶜlocal_geometry),
         f = face_initial_condition(ᶠlocal_geometry),
     )
-
-p =  merge(
-    default_cache(ᶜlocal_geometry, ᶠlocal_geometry, Y, upwinding_mode),
-    additional_cache(ᶜlocal_geometry, ᶠlocal_geometry, dt),)
-
+end
+p = get_cache(ᶜlocal_geometry, ᶠlocal_geometry, Y, dt, upwinding_mode)
 if ode_algorithm <: Union{
     OrdinaryDiffEq.OrdinaryDiffEqImplicitAlgorithm,
     OrdinaryDiffEq.OrdinaryDiffEqAdaptiveImplicitAlgorithm,
