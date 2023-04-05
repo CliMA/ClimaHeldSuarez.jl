@@ -6,7 +6,7 @@ using ClimaCore: Geometry, Meshes, Spaces, Topologies, Fields
 
 const FT = Float64
 
-include("baroclinic_wave_utilities.jl")
+include("held_suarez_forcing_initial_conditions.jl")
 
 const sponge = false
 
@@ -36,8 +36,7 @@ function additional_tendency!(Yₜ, Y, p, t)
     held_suarez_tendency!(Yₜ, Y, p, t)
 end
 
-center_initial_condition(local_geometry) =
-    center_initial_condition(local_geometry, Val(:ρe))
+center_initial_condition(local_geometry) = center_initial_condition(local_geometry, Val(:ρe))
 
 z_stretch = Meshes.Uniform()
 z_stretch_string = "uniform"
@@ -123,3 +122,14 @@ integrator = OrdinaryDiffEq.init(problem,
 
 walltime = @elapsed sol = OrdinaryDiffEq.solve!(integrator)
 
+function postprocessing(sol, output_dir=".")
+    @info "L₂ norm of ρe at t = $(sol.t[1]): $(norm(sol.u[1].c.ρe))"
+    @info "L₂ norm of ρe at t = $(sol.t[end]): $(norm(sol.u[end].c.ρe))"
+
+    anim = Plots.@animate for Y in sol.u
+        ᶜv = Geometry.UVVector.(Y.c.uₕ).components.data.:2
+        Plots.plot(ᶜv, level = 3, clim = (-6, 6))
+    end
+
+    Plots.mp4(anim, joinpath(output_dir, "v.mp4"), fps = 5)
+end
