@@ -7,7 +7,6 @@ using ClimaCore: Geometry, Meshes, Spaces, Topologies, Fields
 const FT = Float64
 
 include("baroclinic_wave_utilities.jl")
-include("common_spaces.jl")
 
 const sponge = false
 
