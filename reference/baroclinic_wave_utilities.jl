@@ -153,9 +153,6 @@ function held_suarez_tendency!(Yₜ, Y, p, t)
     @. Yₜ.c.ρe -= ᶜΔρT * cv_d
 end
 
-
-
-
 function rhs_explicit!(dY, Y, _, t)
     cρ = Y.Yc.ρ # scalar on centers
     fw = Y.w # Covariant3Vector on faces
