@@ -1,5 +1,4 @@
 using LinearAlgebra: ×, norm, norm_sqr, dot
-
 using ClimaCore: Operators, Fields
 
 include("schur_complement_W.jl")
@@ -30,31 +29,25 @@ const curlₕ = Operators.Curl()
 const wcurlₕ = Operators.WeakCurl()
 
 const ᶜinterp = Operators.InterpolateF2C()
-const ᶠinterp = Operators.InterpolateC2F(
-    bottom = Operators.Extrapolate(),
-    top = Operators.Extrapolate(),
-)
-const ᶜdivᵥ = Operators.DivergenceF2C(
-    top = Operators.SetValue(Geometry.Contravariant3Vector(FT(0))),
-    bottom = Operators.SetValue(Geometry.Contravariant3Vector(FT(0))),
-)
-const ᶠgradᵥ = Operators.GradientC2F(
-    bottom = Operators.SetGradient(Geometry.Covariant3Vector(FT(0))),
-    top = Operators.SetGradient(Geometry.Covariant3Vector(FT(0))),
-)
-const ᶠcurlᵥ = Operators.CurlC2F(
-    bottom = Operators.SetCurl(Geometry.Contravariant12Vector(FT(0), FT(0))),
-    top = Operators.SetCurl(Geometry.Contravariant12Vector(FT(0), FT(0))),
-)
-const ᶜFC = Operators.FluxCorrectionC2C(
-    bottom = Operators.Extrapolate(),
-    top = Operators.Extrapolate(),
-)
+const ᶠinterp = Operators.InterpolateC2F(top = Operators.Extrapolate(),
+                                         bottom = Operators.Extrapolate())
+
+const ᶜdivᵥ = Operators.DivergenceF2C(top    = Operators.SetValue(Geometry.Contravariant3Vector(FT(0))),
+                                      bottom = Operators.SetValue(Geometry.Contravariant3Vector(FT(0))))
+
+const ᶠgradᵥ = Operators.GradientC2F(top    = Operators.SetGradient(Geometry.Covariant3Vector(FT(0))),
+                                     bottom = Operators.SetGradient(Geometry.Covariant3Vector(FT(0))))
+                                     
+
+const ᶠcurlᵥ = Operators.CurlC2F(top    = Operators.SetCurl(Geometry.Contravariant12Vector(FT(0), FT(0))),
+                                 bottom = Operators.SetCurl(Geometry.Contravariant12Vector(FT(0), FT(0))))
+                                 
+const ᶜFC = Operators.FluxCorrectionC2C(top = Operators.Extrapolate(),
+                                        bottom = Operators.Extrapolate())
+
 const ᶠupwind_product1 = Operators.UpwindBiasedProductC2F()
-const ᶠupwind_product3 = Operators.Upwind3rdOrderBiasedProductC2F(
-    bottom = Operators.ThirdOrderOneSided(),
-    top = Operators.ThirdOrderOneSided(),
-)
+const ᶠupwind_product3 = Operators.Upwind3rdOrderBiasedProductC2F(bottom = Operators.ThirdOrderOneSided(),
+                                                                  top = Operators.ThirdOrderOneSided())
 
 const ᶜinterp_stencil = Operators.Operator2Stencil(ᶜinterp)
 const ᶠinterp_stencil = Operators.Operator2Stencil(ᶠinterp)
@@ -74,12 +67,15 @@ get_cache(ᶜlocal_geometry, ᶠlocal_geometry, Y, dt, upwinding_mode) = merge(
 
 function default_cache(ᶜlocal_geometry, ᶠlocal_geometry, Y, upwinding_mode)
     ᶜcoord = ᶜlocal_geometry.coordinates
+
     if eltype(ᶜcoord) <: Geometry.LatLongZPoint
         ᶜf = @. 2 * Ω * sind(ᶜcoord.lat)
     else
         ᶜf = map(_ -> f, ᶜlocal_geometry)
     end
+
     ᶜf = @. Geometry.Contravariant3Vector(Geometry.WVector(ᶜf))
+
     return (;
         ᶜuvw = similar(ᶜlocal_geometry, Geometry.Covariant123Vector{FT}),
         ᶜK = similar(ᶜlocal_geometry, FT),
