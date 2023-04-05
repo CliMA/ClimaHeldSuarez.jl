@@ -115,16 +115,7 @@ function implicit_tendency!(Yₜ, Y, p, t)
     ᶠw = Y.f.w
     (; ᶜK, ᶜΦ, ᶜp, ᶠupwind_product) = p
 
-    # Used for automatically computing the Jacobian ∂Yₜ/∂Y. Currently requires
-    # allocation because the cache is stored separately from Y, which means that
-    # similar(Y, <:Dual) doesn't allocate an appropriate cache for computing Yₜ.
-    if eltype(Y) <: Dual
-        ᶜK = similar(ᶜρ)
-        ᶜp = similar(ᶜρ)
-    end
-
     @. ᶜK = norm_sqr(C123(ᶜuₕ) + C123(ᶜinterp(ᶠw))) / 2
-
     @. Yₜ.c.ρ = -(ᶜdivᵥ(ᶠinterp(ᶜρ) * ᶠw))
 
     ᶜρe = Y.c.ρe

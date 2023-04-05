@@ -1,5 +1,6 @@
 # Constants required by "staggered_nonhydrostatic_model.jl"
 # const FT = ? # specified in each test file
+
 const p_0 = FT(1.0e5)
 const R_d = FT(287.0)
 const κ = FT(2 / 7)
@@ -58,13 +59,13 @@ temp(ϕ, z) = (τ_1(z) - τ_2(z) * I_T(ϕ))^(-1)
 pres(ϕ, z) = p_0 * exp(-grav / R_d * (τ_int_1(z) - τ_int_2(z) * I_T(ϕ)))
 θ(ϕ, z) = temp(ϕ, z) * (p_0 / pres(ϕ, z))^κ
 r(λ, ϕ) = R * acos(sind(ϕ_c) * sind(ϕ) + cosd(ϕ_c) * cosd(ϕ) * cosd(λ - λ_c))
-U(ϕ, z) =
-    grav * k / R * τ_int_2(z) * temp(ϕ, z) * (cosd(ϕ)^(k - 1) - cosd(ϕ)^(k + 1))
+U(ϕ, z) = grav * k / R * τ_int_2(z) * temp(ϕ, z) * (cosd(ϕ)^(k - 1) - cosd(ϕ)^(k + 1))
 u(ϕ, z) = -Ω * R * cosd(ϕ) + sqrt((Ω * R * cosd(ϕ))^2 + R * cosd(ϕ) * U(ϕ, z))
 v(ϕ, z) = zero(z)
 c3(λ, ϕ) = cos(π * r(λ, ϕ) / 2 / d_0)^3
 s1(λ, ϕ) = sin(π * r(λ, ϕ) / 2 / d_0)
 cond(λ, ϕ) = (0 < r(λ, ϕ) < d_0) * (r(λ, ϕ) != R * pi)
+
 δu(λ, ϕ, z) =
     -16 * V_p / 3 / sqrt(FT(3)) *
     F_z(z) *
@@ -72,6 +73,7 @@ cond(λ, ϕ) = (0 < r(λ, ϕ) < d_0) * (r(λ, ϕ) != R * pi)
     s1(λ, ϕ) *
     (-sind(ϕ_c) * cosd(ϕ) + cosd(ϕ_c) * sind(ϕ) * cosd(λ - λ_c)) /
     sin(r(λ, ϕ) / R) * cond(λ, ϕ)
+
 δv(λ, ϕ, z) =
     16 * V_p / 3 / sqrt(FT(3)) *
     F_z(z) *
@@ -84,7 +86,6 @@ function center_initial_condition(ᶜlocal_geometry, ᶜ𝔼_name)
     (; lat, long, z) = ᶜlocal_geometry.coordinates
 
     ᶜρ = @. pres(lat, z) / R_d / temp(lat, z)
-
     u₀ = @. u(lat, z)
     v₀ = @. v(lat, z)
 
@@ -93,9 +94,7 @@ function center_initial_condition(ᶜlocal_geometry, ᶜ𝔼_name)
 
     ᶜuₕ_local = @. Geometry.UVVector(u₀, v₀)
     ᶜuₕ = @. Geometry.Covariant12Vector(ᶜuₕ_local, ᶜlocal_geometry)
-    ᶜρe = @. ᶜρ * (
-        cv_d * (temp(lat, z) - T_tri) + norm_sqr(ᶜuₕ_local) / 2 + grav * z
-    )
+    ᶜρe = @. ᶜρ * (cv_d * (temp(lat, z) - T_tri) + norm_sqr(ᶜuₕ_local) / 2 + grav * z)
 
     return NamedTuple{(:ρ, :ρe, :uₕ)}.(tuple.(ᶜρ, ᶜρe, ᶜuₕ))
 end

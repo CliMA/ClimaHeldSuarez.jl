@@ -3,7 +3,6 @@ using DiffEqCallbacks
 using JLD2
 using ClimaCore.DataLayouts
 using ClimaCore: Geometry, Meshes, Spaces, Topologies, Fields
-using ForwardDiff: Dual
 
 const FT = Float64
 
@@ -13,22 +12,17 @@ include("common_spaces.jl")
 const sponge = false
 
 jacobian_flags = (; ∂ᶜ𝔼ₜ∂ᶠ𝕄_mode = :no_∂ᶜp∂ᶜK, ∂ᶠ𝕄ₜ∂ᶜρ_mode = :exact)
-
 test_implicit_solver = false
-
-# Variables required for driver.jl (modify as needed)
-horizontal_mesh = cubed_sphere_mesh(; radius = R, h_elem = 4)
+h_elem = 4
 npoly = 4
 z_max = FT(30e3)
 z_elem = 10
-t_end = FT(60 * 60 * 24 * 10)
+day = FT(60 * 60 * 24)
+t_end = day / 2
 dt = FT(400)
 dt_save_to_sol = FT(60 * 60 * 24)
 dt_save_to_disk = FT(0) # 0 means don't save to disk
 ode_algorithm = OrdinaryDiffEq.Rosenbrock23
-# jacobian_flags = (; ∂ᶜ𝔼ₜ∂ᶠ𝕄_mode = :no_∂ᶜp∂ᶜK, ∂ᶠ𝕄ₜ∂ᶜρ_mode = :exact)
-
-# Additional values required for driver
 upwinding_mode = :third_order
 
 additional_cache(ᶜlocal_geometry, ᶠlocal_geometry, dt) = merge(
@@ -49,58 +43,53 @@ center_initial_condition(local_geometry) =
 z_stretch = Meshes.Uniform()
 z_stretch_string = "uniform"
 
-function cubed_sphere_mesh(; radius, h_elem)
-    domain = Domains.SphereDomain(radius)
-    return Meshes.EquiangularCubedSphere(domain, h_elem)
-end
-
-horizontal_mesh = cubed_sphere_mesh(; radius = R, h_elem = 4)
-
 t_start = FT(0)
+
+# Horizontal space
+domain = Domains.SphereDomain(R)
+horizontal_mesh = Meshes.EquiangularCubedSphere(domain, h_elem)
 quadrature = Spaces.Quadratures.GLL{npoly + 1}()
 h_topology = Topologies.Topology2D(ClimaComms.SingletonCommsContext(), horizontal_mesh)
 h_space = Spaces.SpectralElementSpace2D(h_topology, quadrature)
-z_domain = Domains.IntervalDomain(
-    Geometry.ZPoint(zero(z_max)),
-    Geometry.ZPoint(z_max);
-    boundary_tags = (:bottom, :top),
-)
+
+# Vertical space
+z_bottom = Geometry.ZPoint(zero(z_max))
+z_top = Geometry.ZPoint(z_max)
+z_domain = Domains.IntervalDomain(z_bottom, z_top, boundary_tags = (:bottom, :top))
 z_mesh = Meshes.IntervalMesh(z_domain, z_stretch; nelems = z_elem)
 z_topology = Topologies.IntervalTopology(z_mesh)
 z_space = Spaces.CenterFiniteDifferenceSpace(z_topology)
+
+# "Hybrid" space
 center_space = Spaces.ExtrudedFiniteDifferenceSpace(h_space, z_space)
 face_space = Spaces.FaceExtrudedFiniteDifferenceSpace(center_space)
 
 ᶜlocal_geometry = Fields.local_geometry_field(center_space)
 ᶠlocal_geometry = Fields.local_geometry_field(face_space)
 
-Y = Fields.FieldVector(
-    c = center_initial_condition(ᶜlocal_geometry),
-    f = face_initial_condition(ᶠlocal_geometry),
-)
+Y = Fields.FieldVector(c = center_initial_condition(ᶜlocal_geometry),
+                       f = face_initial_condition(ᶠlocal_geometry))
 
-p = merge(
-        default_cache(ᶜlocal_geometry, ᶠlocal_geometry, Y, upwinding_mode),
-        additional_cache(ᶜlocal_geometry, ᶠlocal_geometry, dt),
-    )
+p = merge(default_cache(ᶜlocal_geometry, ᶠlocal_geometry, Y, upwinding_mode),
+          additional_cache(ᶜlocal_geometry, ᶠlocal_geometry, dt))
 
-if ode_algorithm <: Union{
-    OrdinaryDiffEq.OrdinaryDiffEqImplicitAlgorithm,
-    OrdinaryDiffEq.OrdinaryDiffEqAdaptiveImplicitAlgorithm,
-}
+if ode_algorithm <: Union{OrdinaryDiffEq.OrdinaryDiffEqImplicitAlgorithm,
+                          OrdinaryDiffEq.OrdinaryDiffEqAdaptiveImplicitAlgorithm}
+
     use_transform = !(ode_algorithm in (Rosenbrock23, Rosenbrock32))
+
     W = SchurComplementW(Y, use_transform, jacobian_flags, test_implicit_solver)
-    jac_kwargs =
-        use_transform ? (; jac_prototype = W, Wfact_t = Wfact!) :
-        (; jac_prototype = W, Wfact = Wfact!)
+
+    jac_kwargs = use_transform ?
+                 (; jac_prototype = W, Wfact_t = Wfact!) :
+                 (; jac_prototype = W, Wfact = Wfact!)
 
     alg_kwargs = (; linsolve = linsolve!)
-    if ode_algorithm <: Union{
-        OrdinaryDiffEq.OrdinaryDiffEqNewtonAlgorithm,
-        OrdinaryDiffEq.OrdinaryDiffEqNewtonAdaptiveAlgorithm,
-    }
-        alg_kwargs =
-            (; alg_kwargs..., nlsolve = NLNewton(; max_iter = max_newton_iters))
+
+    if ode_algorithm <: Union{OrdinaryDiffEq.OrdinaryDiffEqNewtonAlgorithm,
+                              OrdinaryDiffEq.OrdinaryDiffEqNewtonAdaptiveAlgorithm}
+
+        alg_kwargs = (; alg_kwargs..., nlsolve = NLNewton(; max_iter = max_newton_iters))
     end
 else
     jac_kwargs = alg_kwargs = (;)
@@ -125,14 +114,13 @@ implicit_tendency_func = ODEFunction(implicit_tendency!; jac_kwargs..., tgrad)
 time_span = (t_start, t_end)
 problem = SplitODEProblem(implicit_tendency_func, remaining_tendency!, Y, time_span, p)
 
-integrator = OrdinaryDiffEq.init(
-    problem,
-    ode_algorithm(; alg_kwargs...);
-    saveat = [],
-    callback = CallbackSet(dss_callback),
-    dt = dt,
-    adaptive = false,
-    progress_steps = 20,
-)
+integrator = OrdinaryDiffEq.init(problem,
+                                 ode_algorithm(; alg_kwargs...);
+                                 saveat = [],
+                                 callback = CallbackSet(dss_callback),
+                                 dt = dt,
+                                 adaptive = false,
+                                 progress_steps = 20)
 
 walltime = @elapsed sol = OrdinaryDiffEq.solve!(integrator)
+
