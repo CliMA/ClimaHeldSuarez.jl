@@ -96,12 +96,20 @@ function center_initial_condition(ᶜlocal_geometry, ᶜ𝔼_name)
     ᶜuₕ = @. Geometry.Covariant12Vector(ᶜuₕ_local, ᶜlocal_geometry)
     ᶜρe = @. ᶜρ * (cv_d * (temp(lat, z) - T_tri) + norm_sqr(ᶜuₕ_local) / 2 + grav * z)
 
-    return NamedTuple{(:ρ, :ρe, :uₕ)}.(tuple.(ᶜρ, ᶜρe, ᶜuₕ))
+    # This creates a ClimaCore.Field whos _values_ are NamedTuple
+    # eg we are broadcasting over the nodes of the three fields
+    # ρ, ρe, uₕ.
+    ic = NamedTuple{(:ρ, :ρe, :uₕ)}.(tuple.(ᶜρ, ᶜρe, ᶜuₕ))
+    
+    return ic
 end
 
 function face_initial_condition(local_geometry)
     (; lat, long, z) = local_geometry.coordinates
     w = @. Geometry.Covariant3Vector(zero(z))
+
+    # This creates a ClimaCore.Field whos _values_ are NamedTuple
+    # eg we are broadcasting over the nodes of the (singleton) field w.
     return NamedTuple{(:w,)}.(tuple.(w))
 end
 

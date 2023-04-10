@@ -1,47 +1,55 @@
 using OrdinaryDiffEq
 using DiffEqCallbacks
 using JLD2
+using Printf
+using Plots
+using ClimaCorePlots
+using ClimaComms
 using ClimaCore.DataLayouts
-using ClimaCore: Geometry, Meshes, Spaces, Topologies, Fields
+
+using ClimaCore: Domains, Geometry, Meshes, Spaces, Topologies, Fields
 
 const FT = Float64
+const sponge = false
 
 include("held_suarez_forcing_initial_conditions.jl")
 
-const sponge = false
-
-jacobian_flags = (; ∂ᶜ𝔼ₜ∂ᶠ𝕄_mode = :no_∂ᶜp∂ᶜK, ∂ᶠ𝕄ₜ∂ᶜρ_mode = :exact)
+day = FT(60 * 60 * 24)
+t_start = zero(FT)
+t_end = 40day
 test_implicit_solver = false
 h_elem = 4
 npoly = 4
 z_max = FT(30e3)
 z_elem = 10
-day = FT(60 * 60 * 24)
-t_end = day / 2
 dt = FT(400)
 dt_save_to_sol = FT(60 * 60 * 24)
 dt_save_to_disk = FT(0) # 0 means don't save to disk
 ode_algorithm = OrdinaryDiffEq.Rosenbrock23
+jacobian_flags = (; ∂ᶜ𝔼ₜ∂ᶠ𝕄_mode = :no_∂ᶜp∂ᶜK, ∂ᶠ𝕄ₜ∂ᶜρ_mode = :exact)
 upwinding_mode = :third_order
 
-additional_cache(ᶜlocal_geometry, ᶠlocal_geometry, dt) = merge(
-    hyperdiffusion_cache(ᶜlocal_geometry, ᶠlocal_geometry; κ₄ = FT(2e17)),
-    sponge ? rayleigh_sponge_cache(ᶜlocal_geometry, ᶠlocal_geometry, dt) : (;),
-    held_suarez_cache(ᶜlocal_geometry),
-)
+function additional_cache(ᶜlocal_geometry, ᶠlocal_geometry, dt)
+    diff_cache = hyperdiffusion_cache(ᶜlocal_geometry, ᶠlocal_geometry; κ₄ = FT(2e17))
+    hs_cache = held_suarez_cache(ᶜlocal_geometry)
+
+    # `sponge` is a global variable
+    sponge_cache = sponge ? rayleigh_sponge_cache(ᶜlocal_geometry, ᶠlocal_geometry, dt) : NamedTuple()
+
+    return merge(diff_cache, sponge_cache, hs_cache)
+end
 
 function additional_tendency!(Yₜ, Y, p, t)
     hyperdiffusion_tendency!(Yₜ, Y, p, t)
     sponge && rayleigh_sponge_tendency!(Yₜ, Y, p, t)
     held_suarez_tendency!(Yₜ, Y, p, t)
+    return nothing
 end
 
 center_initial_condition(local_geometry) = center_initial_condition(local_geometry, Val(:ρe))
 
 z_stretch = Meshes.Uniform()
 z_stretch_string = "uniform"
-
-t_start = FT(0)
 
 # Horizontal space
 domain = Domains.SphereDomain(R)
@@ -101,6 +109,36 @@ dss_callback = FunctionCallingCallback(func_start = true) do Y, t, integrator
     p = integrator.p
     Spaces.weighted_dss!(Y.c, p.ghost_buffer.c)
     Spaces.weighted_dss!(Y.f, p.ghost_buffer.f)
+    nothing
+end
+
+wall_time = Ref(time_ns())
+
+function prettytime(t)
+    minute = 60.0
+    hour = 60minute
+    day = 24hour
+    if t < minute
+        return @sprintf("%.3f seconds", t)
+    elseif t < hour
+        return @sprintf("%.3f minutes", t/minute)
+    elseif t < day
+        return @sprintf("%.3f hours", t/hour)
+    else
+        return @sprintf("%.3f days", t/day)
+    end
+end
+
+progress_callback = FunctionCallingCallback(func_start = true) do Y, t, integrator
+    time = integrator.t
+    iteration = integrator.iter
+    if iteration % 10 == 0
+        elapsed_wall_time = 1e-9 * (time_ns() - wall_time[])
+        @info @sprintf("Iteration: %d, time: %s, wall time: %s",
+                       iteration, prettytime(time), prettytime(elapsed_wall_time))
+        wall_time[] = time_ns()
+    end
+    nothing
 end
 
 # Explicit:
@@ -115,21 +153,25 @@ problem = SplitODEProblem(implicit_tendency_func, remaining_tendency!, Y, time_s
 integrator = OrdinaryDiffEq.init(problem,
                                  ode_algorithm(; alg_kwargs...);
                                  saveat = [],
-                                 callback = CallbackSet(dss_callback),
+                                 callback = CallbackSet(dss_callback, progress_callback),
                                  dt = dt,
                                  adaptive = false,
                                  progress_steps = 20)
 
 walltime = @elapsed sol = OrdinaryDiffEq.solve!(integrator)
 
-function postprocessing(sol, output_dir=".")
-    @info "L₂ norm of ρe at t = $(sol.t[1]): $(norm(sol.u[1].c.ρe))"
-    @info "L₂ norm of ρe at t = $(sol.t[end]): $(norm(sol.u[end].c.ρe))"
+@info "Simulation finished running for " * prettytime(walltime)
+@info "L₂ norm of ρe at t = $(sol.t[1]): $(norm(sol.u[1].c.ρe))"
+@info "L₂ norm of ρe at t = $(sol.t[end]): $(norm(sol.u[end].c.ρe))"
 
-    anim = Plots.@animate for Y in sol.u
-        ᶜv = Geometry.UVVector.(Y.c.uₕ).components.data.:2
-        Plots.plot(ᶜv, level = 3, clim = (-6, 6))
-    end
+@info "Making an animation of the results..."
+Nt = length(sol.u)
 
-    Plots.mp4(anim, joinpath(output_dir, "v.mp4"), fps = 5)
+anim = Plots.@animate for (n, Y) in enumerate(sol.u)
+    @info "Plotting frame $n of $Nt..."
+    ᶜu = Geometry.UVVector.(Y.c.uₕ).components.data.:1
+    Plots.plot(ᶜu, level = 3, clim = (-3, 3))
 end
+
+Plots.mp4(anim, "u.mp4", fps = 12)
+

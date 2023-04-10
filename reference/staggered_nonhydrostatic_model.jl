@@ -167,30 +167,19 @@ function default_remaining_tendency!(Yₜ, Y, p, t)
     @. Yₜ.c.ρe -= ᶜdivᵥ(ᶠinterp((ᶜρe + ᶜp) * ᶜuₕ))
 
     # Momentum conservation
-
-    # if point_type <: Geometry.Abstract3DPoint
-        @. ᶜω³ = curlₕ(ᶜuₕ)
-        @. ᶠω¹² = curlₕ(ᶠw)
-    # elseif point_type <: Geometry.Abstract2DPoint
-    #     ᶜω³ .= Ref(zero(eltype(ᶜω³)))
-    #     @. ᶠω¹² = Geometry.Contravariant12Vector(curlₕ(ᶠw))
-    # end
+    @. ᶜω³ = curlₕ(ᶜuₕ)
+    @. ᶠω¹² = curlₕ(ᶠw)
     @. ᶠω¹² += ᶠcurlᵥ(ᶜuₕ)
 
     # TODO: Modify to account for topography
     @. ᶠu¹² = Geometry.Contravariant12Vector(ᶠinterp(ᶜuₕ))
     @. ᶠu³ = Geometry.Contravariant3Vector(ᶠw)
 
-    @. Yₜ.c.uₕ -=
-        ᶜinterp(ᶠω¹² × ᶠu³) + (ᶜf + ᶜω³) × Geometry.Contravariant12Vector(ᶜuₕ)
-    # if point_type <: Geometry.Abstract3DPoint
-        @. Yₜ.c.uₕ -= gradₕ(ᶜp) / ᶜρ + gradₕ(ᶜK + ᶜΦ)
-    # elseif point_type <: Geometry.Abstract2DPoint
-    #     @. Yₜ.c.uₕ -=
-    #         Geometry.Covariant12Vector(gradₕ(ᶜp) / ᶜρ + gradₕ(ᶜK + ᶜΦ))
-    # end
-
+    @. Yₜ.c.uₕ -= ᶜinterp(ᶠω¹² × ᶠu³) + (ᶜf + ᶜω³) × Geometry.Contravariant12Vector(ᶜuₕ)
+    @. Yₜ.c.uₕ -= gradₕ(ᶜp) / ᶜρ + gradₕ(ᶜK + ᶜΦ)
     @. Yₜ.f.w -= ᶠω¹² × ᶠu¹²
+
+    return nothing
 end
 
 additional_tendency!(Yₜ, Y, p, t) = nothing
