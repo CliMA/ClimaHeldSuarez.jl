@@ -1,5 +1,4 @@
 using LinearAlgebra: ×, norm, norm_sqr, dot
-
 using ClimaCore: Operators, Fields
 
 include("schur_complement_W.jl")
@@ -30,31 +29,25 @@ const curlₕ = Operators.Curl()
 const wcurlₕ = Operators.WeakCurl()
 
 const ᶜinterp = Operators.InterpolateF2C()
-const ᶠinterp = Operators.InterpolateC2F(
-    bottom = Operators.Extrapolate(),
-    top = Operators.Extrapolate(),
-)
-const ᶜdivᵥ = Operators.DivergenceF2C(
-    top = Operators.SetValue(Geometry.Contravariant3Vector(FT(0))),
-    bottom = Operators.SetValue(Geometry.Contravariant3Vector(FT(0))),
-)
-const ᶠgradᵥ = Operators.GradientC2F(
-    bottom = Operators.SetGradient(Geometry.Covariant3Vector(FT(0))),
-    top = Operators.SetGradient(Geometry.Covariant3Vector(FT(0))),
-)
-const ᶠcurlᵥ = Operators.CurlC2F(
-    bottom = Operators.SetCurl(Geometry.Contravariant12Vector(FT(0), FT(0))),
-    top = Operators.SetCurl(Geometry.Contravariant12Vector(FT(0), FT(0))),
-)
-const ᶜFC = Operators.FluxCorrectionC2C(
-    bottom = Operators.Extrapolate(),
-    top = Operators.Extrapolate(),
-)
+const ᶠinterp = Operators.InterpolateC2F(top = Operators.Extrapolate(),
+                                         bottom = Operators.Extrapolate())
+
+const ᶜdivᵥ = Operators.DivergenceF2C(top    = Operators.SetValue(Geometry.Contravariant3Vector(FT(0))),
+                                      bottom = Operators.SetValue(Geometry.Contravariant3Vector(FT(0))))
+
+const ᶠgradᵥ = Operators.GradientC2F(top    = Operators.SetGradient(Geometry.Covariant3Vector(FT(0))),
+                                     bottom = Operators.SetGradient(Geometry.Covariant3Vector(FT(0))))
+                                     
+
+const ᶠcurlᵥ = Operators.CurlC2F(top    = Operators.SetCurl(Geometry.Contravariant12Vector(FT(0), FT(0))),
+                                 bottom = Operators.SetCurl(Geometry.Contravariant12Vector(FT(0), FT(0))))
+                                 
+const ᶜFC = Operators.FluxCorrectionC2C(top = Operators.Extrapolate(),
+                                        bottom = Operators.Extrapolate())
+
 const ᶠupwind_product1 = Operators.UpwindBiasedProductC2F()
-const ᶠupwind_product3 = Operators.Upwind3rdOrderBiasedProductC2F(
-    bottom = Operators.ThirdOrderOneSided(),
-    top = Operators.ThirdOrderOneSided(),
-)
+const ᶠupwind_product3 = Operators.Upwind3rdOrderBiasedProductC2F(bottom = Operators.ThirdOrderOneSided(),
+                                                                  top = Operators.ThirdOrderOneSided())
 
 const ᶜinterp_stencil = Operators.Operator2Stencil(ᶜinterp)
 const ᶠinterp_stencil = Operators.Operator2Stencil(ᶠinterp)
@@ -74,12 +67,15 @@ get_cache(ᶜlocal_geometry, ᶠlocal_geometry, Y, dt, upwinding_mode) = merge(
 
 function default_cache(ᶜlocal_geometry, ᶠlocal_geometry, Y, upwinding_mode)
     ᶜcoord = ᶜlocal_geometry.coordinates
+
     if eltype(ᶜcoord) <: Geometry.LatLongZPoint
         ᶜf = @. 2 * Ω * sind(ᶜcoord.lat)
     else
         ᶜf = map(_ -> f, ᶜlocal_geometry)
     end
+
     ᶜf = @. Geometry.Contravariant3Vector(Geometry.WVector(ᶜf))
+
     return (;
         ᶜuvw = similar(ᶜlocal_geometry, Geometry.Covariant123Vector{FT}),
         ᶜK = similar(ᶜlocal_geometry, FT),
@@ -115,16 +111,7 @@ function implicit_tendency!(Yₜ, Y, p, t)
     ᶠw = Y.f.w
     (; ᶜK, ᶜΦ, ᶜp, ᶠupwind_product) = p
 
-    # Used for automatically computing the Jacobian ∂Yₜ/∂Y. Currently requires
-    # allocation because the cache is stored separately from Y, which means that
-    # similar(Y, <:Dual) doesn't allocate an appropriate cache for computing Yₜ.
-    if eltype(Y) <: Dual
-        ᶜK = similar(ᶜρ)
-        ᶜp = similar(ᶜρ)
-    end
-
     @. ᶜK = norm_sqr(C123(ᶜuₕ) + C123(ᶜinterp(ᶠw))) / 2
-
     @. Yₜ.c.ρ = -(ᶜdivᵥ(ᶠinterp(ᶜρ) * ᶠw))
 
     ᶜρe = Y.c.ρe
@@ -180,30 +167,19 @@ function default_remaining_tendency!(Yₜ, Y, p, t)
     @. Yₜ.c.ρe -= ᶜdivᵥ(ᶠinterp((ᶜρe + ᶜp) * ᶜuₕ))
 
     # Momentum conservation
-
-    # if point_type <: Geometry.Abstract3DPoint
-        @. ᶜω³ = curlₕ(ᶜuₕ)
-        @. ᶠω¹² = curlₕ(ᶠw)
-    # elseif point_type <: Geometry.Abstract2DPoint
-    #     ᶜω³ .= Ref(zero(eltype(ᶜω³)))
-    #     @. ᶠω¹² = Geometry.Contravariant12Vector(curlₕ(ᶠw))
-    # end
+    @. ᶜω³ = curlₕ(ᶜuₕ)
+    @. ᶠω¹² = curlₕ(ᶠw)
     @. ᶠω¹² += ᶠcurlᵥ(ᶜuₕ)
 
     # TODO: Modify to account for topography
     @. ᶠu¹² = Geometry.Contravariant12Vector(ᶠinterp(ᶜuₕ))
     @. ᶠu³ = Geometry.Contravariant3Vector(ᶠw)
 
-    @. Yₜ.c.uₕ -=
-        ᶜinterp(ᶠω¹² × ᶠu³) + (ᶜf + ᶜω³) × Geometry.Contravariant12Vector(ᶜuₕ)
-    # if point_type <: Geometry.Abstract3DPoint
-        @. Yₜ.c.uₕ -= gradₕ(ᶜp) / ᶜρ + gradₕ(ᶜK + ᶜΦ)
-    # elseif point_type <: Geometry.Abstract2DPoint
-    #     @. Yₜ.c.uₕ -=
-    #         Geometry.Covariant12Vector(gradₕ(ᶜp) / ᶜρ + gradₕ(ᶜK + ᶜΦ))
-    # end
-
+    @. Yₜ.c.uₕ -= ᶜinterp(ᶠω¹² × ᶠu³) + (ᶜf + ᶜω³) × Geometry.Contravariant12Vector(ᶜuₕ)
+    @. Yₜ.c.uₕ -= gradₕ(ᶜp) / ᶜρ + gradₕ(ᶜK + ᶜΦ)
     @. Yₜ.f.w -= ᶠω¹² × ᶠu¹²
+
+    return nothing
 end
 
 additional_tendency!(Yₜ, Y, p, t) = nothing

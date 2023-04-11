@@ -4,6 +4,23 @@ authors = ["Gregory Wagner <wagner.greg@gmail.com>"]
 version = "0.1.0"
 
 [deps]
+BlockArrays = "8e7c35d0-a365-5155-bbbb-fb81a777f24e"
 ClimaComms = "3a4d1b5c-c61d-41fd-a00a-5873ba7a1b0d"
 ClimaCore = "d414da3d-4745-48bb-8d80-42e94e092884"
+ClimaCorePlots = "cf7c7e5a-b407-4c48-9047-11a94a308626"
+DiffEqBase = "2b5f629d-d688-5b77-993f-72d75c75574e"
+DiffEqCallbacks = "459566f4-90b8-5000-8ac3-15dfb0a30def"
+DiffEqOperators = "9fdde737-9c7f-55bf-ade8-46b3f136cc48"
+DocStringExtensions = "ffbed154-4ef7-542d-bbb7-c09d3a79fcae"
+JLD2 = "033835bb-8acc-5ee8-8aae-3f567f8a3819"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+OrdinaryDiffEq = "5.64.0"
+SciMLBase = "<1.51"
+
+[extras]
+CPUSummary = "2a0fbf3d-bb9c-48f3-b0a9-814d99fd7ab9"
